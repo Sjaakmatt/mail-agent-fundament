@@ -1,0 +1,179 @@
+// GEBLOKKEERD — dit bestand kan nog niet `index.ts` heten.
+//
+// De import hieronder (`@factumai/agent-core/modules/administratie`) verwijst
+// naar een subpad dat niet in de exports-map van agent-core staat. Die map is
+// een kernbestand, en fase 5 mag er geen aanraken: het gat hoort eerst
+// gerepareerd te worden. Zie OPEN-PUNTEN.md, "Uit fase 5", punt 1.
+//
+// Zodra dat kan: hernoem naar `index.ts`, haal deze kop weg, en zet de module
+// aan in client.manifest.yaml. Verder is er niets aan te passen.
+
+/**
+ * De administratiemodule in de werkbak.
+ *
+ * De tweede module op dit fundament, en daarmee de toets: als het contract uit
+ * fase 1 tot 4 klopt, is dit bestand alles wat de cockpit van dit domein hoeft
+ * te weten — plus het detailscherm ernaast en één regel in het manifest.
+ *
+ * Wat er onderweg níét bleek te passen, staat in `OPEN-PUNTEN.md` onder
+ * "Uit fase 5". Die punten zijn niet stilzwijgend opgelost door een kernbestand
+ * te bewerken.
+ */
+
+import { Receipt } from "lucide-react";
+import { categoryLabelIn } from "@factumai/agent-core";
+import { ADMINISTRATIE_MODULE } from "@factumai/agent-core/modules/administratie";
+import {
+  triageOf,
+  type CardBadge,
+  type ReviewCardViewModel,
+  type ReviewItemRow,
+} from "@/lib/review";
+import type { WorkbenchModule } from "../contract";
+import { AdministratieDetail } from "./detail/DetailView";
+import {
+  euro,
+  finProposed,
+  finSpecialistLabel,
+  type AdministratieProposed,
+} from "./proposed";
+
+/** Wat er op de kaart staat als vorm. */
+const KIND_LABELS: Record<string, string> = {
+  invoice_booking: "Boeking",
+  payment_reminder: "Herinnering",
+  dunning_step: "Aanmaning",
+  payment_batch: "Betaalbatch",
+  reconciliation_match: "Aflettering",
+  vat_report: "Btw",
+  credit_note: "Creditnota",
+  draft_email: "Concept",
+  task: "Taak",
+};
+
+export const detailHref = (id: string) => `/item/${encodeURIComponent(id)}`;
+
+/**
+ * De titel per soort voorstel.
+ *
+ * Het bedrag staat in de titel en niet in een badge, en dat is met opzet: in
+ * dit domein is het bedrag het eerste wat een reviewer wil weten. Een lijst
+ * kaarten waarop je moet klikken om te zien of het over € 40 of € 40.000 gaat,
+ * dwingt hem elke kaart te openen.
+ */
+function titelVoor(row: ReviewItemRow, p: AdministratieProposed): string {
+  switch (row.kind) {
+    case "invoice_booking": {
+      const bedrag = euro(p.invoice?.totalAmount);
+      return p.invoice?.number
+        ? `Factuur ${p.invoice.number}${bedrag ? `, ${bedrag}` : ""}`
+        : row.summary;
+    }
+    case "payment_reminder": {
+      const bedrag = euro(p.totalOpen);
+      return bedrag ? `Herinnering, ${bedrag}` : "Herinnering";
+    }
+    case "dunning_step": {
+      const bedrag = euro(p.totalOpen);
+      return `Aanmaning trap ${p.dunning?.stage ?? "?"}${bedrag ? `, ${bedrag}` : ""}`;
+    }
+    case "reconciliation_match": {
+      const bedrag = euro(p.transaction?.amount);
+      return bedrag ? `Mutatie ${bedrag} koppelen` : "Bankmutatie koppelen";
+    }
+    case "vat_report":
+      return `Btw-controle ${p.period ?? ""}`.trim();
+    default:
+      return p.subject ?? row.summary;
+  }
+}
+
+/** Om wie het gaat: de relatie, niet de afzender van een bericht. */
+function relatieVan(p: AdministratieProposed): string | null {
+  return p.supplier?.name ?? p.relation?.name ?? p.transaction?.counterpartyName ?? null;
+}
+
+function badgesFor(row: ReviewItemRow, p: AdministratieProposed): CardBadge[] {
+  const badges: CardBadge[] = [];
+
+  const categorie = categoryLabelIn(ADMINISTRATIE_MODULE, p.classification?.category);
+  if (categorie) badges.push({ label: categorie, tone: "neutral" });
+
+  const specialist = finSpecialistLabel(p.classification?.specialist ?? null);
+  if (specialist) badges.push({ label: specialist, tone: "accent" });
+
+  // De signalen waar een reviewer op moet letten vóór hij klikt.
+  if (p.match?.status === "afwijking") {
+    badges.push({ label: "afwijking", tone: "alert" });
+  }
+  if ((p.duplicateCheck?.matches ?? []).length > 0) {
+    badges.push({ label: "dubbel?", tone: "alert" });
+  }
+  if (typeof p.dunning?.stage === "number") {
+    badges.push({ label: `trap ${p.dunning.stage}`, tone: "neutral" });
+  }
+  const dagen = p.items?.[0]?.daysOverdue;
+  if (typeof dagen === "number") {
+    badges.push({ label: `${dagen} dagen`, tone: dagen > 30 ? "alert" : "neutral" });
+  }
+  if (p.relation?.isConsumer) {
+    badges.push({ label: "consument", tone: "alert" });
+  }
+  if ((p.differences ?? []).length > 0) {
+    badges.push({ label: `${p.differences?.length} verschillen`, tone: "alert" });
+  }
+
+  return badges;
+}
+
+export const administratieModule: WorkbenchModule = {
+  id: ADMINISTRATIE_MODULE.id,
+  label: ADMINISTRATIE_MODULE.label,
+  description: ADMINISTRATIE_MODULE.description,
+  icon: Receipt,
+  kinds: ADMINISTRATIE_MODULE.kinds,
+  categories: ADMINISTRATIE_MODULE.categories,
+  detailHref,
+  DetailView: AdministratieDetail,
+
+  /**
+   * Wat een reviewer aan een administratie-voorstel mag wijzigen.
+   *
+   * Onderwerp en tekst van een uitgaand bericht — meer niet. **Geen bedragen**:
+   * die komen uit de extractie of uit het pakket, en een bedrag dat in de
+   * cockpit met de hand wordt overschreven, is niet meer herleidbaar naar de
+   * bron waar de grounding aan hangt. Wie een bedrag wil corrigeren, corrigeert
+   * de boeking in het pakket.
+   */
+  applyEdit(row, patch) {
+    const huidig = finProposed(row);
+    return {
+      ...huidig,
+      subject: typeof patch.subject === "string" ? patch.subject : (huidig.subject ?? ""),
+      body: typeof patch.body === "string" ? patch.body : (huidig.body ?? ""),
+    };
+  },
+
+  toCard(row: ReviewItemRow): ReviewCardViewModel {
+    const p = finProposed(row);
+    const triage = triageOf(row);
+    return {
+      id: row.id,
+      module: ADMINISTRATIE_MODULE.id,
+      kind: row.kind,
+      kindLabel: KIND_LABELS[row.kind] ?? null,
+      title: titelVoor(row, p),
+      subtitle: relatieVan(p) ?? "Relatie niet vastgesteld",
+      summary: row.summary,
+      badges: badgesFor(row, p),
+      href: detailHref(row.id),
+      createdAt: row.created_at,
+      decidedAt: row.decided_at,
+      decidedBy: row.decided_by,
+      confidence: row.confidence,
+      status: row.status,
+      triage: triage.tier,
+      triageReason: triage.reason,
+    };
+  },
+};

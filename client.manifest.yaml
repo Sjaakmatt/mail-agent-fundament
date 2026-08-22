@@ -96,6 +96,26 @@ ui:
 # module bovenaan.
 # ---------------------------------------------------------------------------
 modules:
+  # Administratie staat bovenaan omdat hij het smalst claimt: hij pakt uit de
+  # mailstroom alleen wat op financiële post lijkt (een bijlage plus een
+  # factuurwoord), en laat de rest door naar klantenservice. Andersom zou
+  # klantenservice alles opeisen en zou administratie nooit een factuur zien.
+  #
+  # Administratie is gebouwd (`packages/agent-core/src/modules/administratie/`
+  # en `ui/lib/modules/administratie/`) maar staat bewust nog UIT. Aanzetten
+  # kan pas als de vijf gaten uit fase 5 gerepareerd zijn — zie OPEN-PUNTEN.md.
+  # Registreren met die gaten open levert een rode build op én een module die
+  # geen schrijfoperaties kan uitdrukken.
+  #
+  # LET OP bij het aanzetten: `order` is vandaag één knop voor twee dingen — de
+  # volgorde waarin `resolveModule` claims afloopt én de tabvolgorde in de
+  # werkbak. Administratie moet vóór klantenservice claimen (hij pakt alleen
+  # financiële post uit de mailstroom, klantenservice claimt de rest
+  # onvoorwaardelijk), en krijgt daarmee vandaag gedwongen ook de eerste tab.
+  #
+  # - id: "administratie"
+  #   source: "core"
+  #   order: 5
   - id: "klantenservice"
     # 'core'   = uit het fundament (packages/agent-core/src/modules/<id>/).
     # 'client' = van deze klant (packages/agent-core/src/client-modules/<id>/),

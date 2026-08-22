@@ -111,3 +111,136 @@ worden — en dat is geen technische afweging.
 **De demo-pagina en de policy-editor kennen nog één taxonomie.**
 `ui/app/(dashboard)/demo/` en `PolicyEditor` gaan uit van de categorieën van de
 actieve module. Bij één module klopt dat; bij twee hoort er een keuze bij.
+
+## Uit fase 5 — vijf gaten in het contract
+
+Fase 5 bouwt module twee (administratie) met één harde eis: **geen enkel
+bestand buiten** `packages/agent-core/src/modules/administratie/`,
+`ui/lib/modules/administratie/`, `client.manifest.yaml` plus de gegenereerde
+registers, en één nieuwe migratie. Lukt dat niet, dan is het contract uit fase
+1 tot 4 niet af, en dan is het antwoord: opschrijven en eerst repareren, niet
+alsnog het kernbestand bewerken.
+
+Het lukte niet. Vijf keer niet, en dat is precies wat deze fase moest opleveren.
+
+Wat er wél staat: het volledige pakket (poort, taxonomie van veertien
+categorieën, acht specialisten, zestien feitenbronnen, uitkomsten en
+identificatie) plus de schil-helft op de detailweergave na de registratie. Dat
+compileert en raakt geen kernbestand. De module staat **uit** in
+`client.manifest.yaml`; aanzetten kan pas als de vijf punten hieronder
+gerepareerd zijn.
+
+### 1. De exports-map kent modules bij naam
+
+`ui/lib/modules/administratie/index.ts` moet de descriptor importeren via
+`@factumai/agent-core/modules/administratie`. Dat subpad bestaat niet:
+`packages/agent-core/package.json` noemt alleen `./modules/klantenservice`.
+
+Dit is het gat dat de module vandaag blokkeert — zonder deze regel compileert
+de registratie niet, en dus staat `index.ts` er niet.
+
+**Reparatie.** Eén regel per module in de exports-map, en die regel is af te
+leiden uit het manifest. Hij hoort dus gegenereerd te worden door
+`scripts/generate-registry.mjs`, naast de twee registers die dat script al
+schrijft. Dan is "een module toevoegen" één plek en niet twee.
+
+De registratie die klaarstaat zodra dat kan (verder ongewijzigd overnemen):
+
+```ts
+export const administratieModule: WorkbenchModule = {
+  id: ADMINISTRATIE_MODULE.id,
+  label: ADMINISTRATIE_MODULE.label,
+  description: ADMINISTRATIE_MODULE.description,
+  icon: Receipt,
+  kinds: ADMINISTRATIE_MODULE.kinds,
+  categories: ADMINISTRATIE_MODULE.categories,
+  detailHref,
+  DetailView: AdministratieDetail,
+  applyEdit,   // alleen subject en body; bedragen komen uit de bron
+  toCard,      // titel met bedrag, badges voor afwijking/dubbel/trap/consument
+};
+```
+
+### 2. Claim-precedentie en tabvolgorde zijn één knop
+
+`resolveModule` neemt de eerste module die een signaal claimt, en
+`generate-registry.mjs` sorteert beide registers op hetzelfde `order`-veld.
+
+Administratie moet **vóór** klantenservice claimen: klantenservice claimt
+`mail.received` onvoorwaardelijk, administratie alleen wat op financiële post
+lijkt. Staat administratie achteraan, dan ziet hij nooit een factuur. Maar
+daarmee krijgt hij vandaag gedwongen ook de eerste tab in de werkbak, en dat is
+een productkeuze die niets met routering te maken heeft.
+
+**Reparatie.** Twee velden in het manifest: `order` voor de tab en
+`claimPriority` (of gewoon de volgorde in het bestand) voor de claims. Klein,
+en het scheelt een verkeerde tab of een verkeerde route.
+
+### 3. Drie kerntests gaan uit van één module
+
+`packages/agent-core/src/modules/registry.test.ts` valt om zodra er een tweede
+module in het register staat:
+
+| test | waarom hij omvalt |
+| --- | --- |
+| `geeft null als niemand het claimt` | gebruikt `bank/payment.in` als "niemand claimt dit" — administratie claimt dat wél |
+| `vindt een actietype over de registry heen` | pakt `MODULE_PACKS[0].actions[0]`, en de eerste module heeft nog geen acties |
+| `meldt een actie-slug die in twee modules bestaat` | verzint een tweede module met id `administratie`, wat nu botst met de echte |
+
+Alle drie toetsen het juiste gedrag met een fixture die aanneemt dat er één
+module is. Dat is geen testfout maar hetzelfde gat als in de rest van de kern:
+de aanname "één module" zit ook in de tests.
+
+**Reparatie.** De drie tests op eigen fixture-pakketten laten draaien in plaats
+van op het echte register. `assertRegistry` accepteert al een lijst; de andere
+twee moeten dat ook kunnen.
+
+### 4. `PRECONDITION_KINDS` is gesloten
+
+De blauwdruk vraagt om `openstaande_post` (`invoiceNumber`, `openAmount`,
+`dunningStage`) en `betaalstatus` (`transactionId`, `reconciled`, `amount`).
+`PRECONDITION_KINDS` in `packages/agent-core/src/actions/index.ts` is een vaste
+lijst van drie.
+
+Gevolg: van de elf actietypen uit de blauwdruk zijn er zes niet uit te drukken
+zonder een preconditie te lenen die niet past. Een aanmaning met preconditie
+`factuurstatus` toetst het verkeerde veld, en een preconditie die het verkeerde
+toetst is erger dan geen: hij ziet eruit als een controle en werkt als een
+blokkade. Daarom staan de actietypen nog niet op het pakket.
+
+**Reparatie.** `PRECONDITION_KINDS` en `PRECONDITION_FIELDS` van de module
+laten komen in plaats van uit de kern, of de kern een unie laten opbouwen uit
+de geregistreerde pakketten.
+
+### 5. `DataCategory` is gesloten
+
+De blauwdruk zet `persoonsgegevens` op de aanmaningshistorie, de relatie en de
+bankmutaties, en noemt `bijzonder` voor wat er in een bankomschrijving kan
+staan. `DataCategory` kent drie waarden.
+
+Gevolg: de bronnen van administratie staan nu op `financieel` waar
+`persoonsgegevens` hoort. Dat is niet ruimer dan bedoeld — de MCP snijdt nog
+steeds bij — maar het onderscheid dat de AVG-paragraaf van de blauwdruk maakt,
+is niet uit te drukken. Betaalachterstand van een eenmanszaak is een
+persoonsgegeven, en dat hoort een categorie te zijn die je apart kunt weigeren.
+
+**Reparatie.** De lijst uitbreiden op beide plekken (agent-core en de MCP-laag)
+— het commentaar bij `DATA_CATEGORIES` beschrijft die dubbele wijziging al als
+de bedoelde werkwijze. Dit is een productafspraak, geen technische ingreep.
+
+### Wat er daarna nog wacht (geen contractgat, wel werk)
+
+- **Schermen.** `navItems` naar `/administratie/facturen` en drie andere
+  routes vragen elk een `page.tsx` onder `ui/app/(dashboard)/`. Dat is per
+  ontwerp zo sinds fase 4 (Next heeft de route nodig, de guard hoort in
+  `page.tsx`), maar het betekent wel dat een module niet volledig in zijn eigen
+  map past. Bewust geaccepteerd, hier genoteerd zodat het een keuze blijft.
+- **De golden set en de adversarial-gate draaien op één module.**
+  `scripts/golden.ts` leest `tests/golden/klantenservice.jsonl` en
+  `packById('klantenservice')`; `scripts/adversarial-gate.ts` idem. Voor een
+  set per module moeten die twee over de registry lopen.
+- **De demo-scenario's** staan in `ui/lib/demo/scenarios.ts`, één lijst voor de
+  hele werkbak. De acht scenario's uit de blauwdruk (waaronder de escalatie op
+  een gewijzigd rekeningnummer) horen bij de module.
+- **De migratie** met de zes `aios_fin_*`-tabellen en de `demo_fin_*`-tabellen
+  is nog niet geschreven: zonder registratie is er niets dat ze leest.
